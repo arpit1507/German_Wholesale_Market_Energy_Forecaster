@@ -1,0 +1,9 @@
+artifacts_root: artifacts
+
+data_ingestion:
+  raw_data_dir: artifacts/raw
+  output_file_name: smard_market_features.parquet
+  max_weeks_back: 52
+  base_url: https://www.smard.de/app/chart_data
+  timeout_sec: 30.0
+  max_concurrency: 8

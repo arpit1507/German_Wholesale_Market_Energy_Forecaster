@@ -1,6 +1,3 @@
-Here is the complete, production-ready `README.md` containing the executive problem statement, architecture blueprint, directory layout, and setup commands:
-
-```markdown
 # Wholesale German Energy Market: Day-Ahead Price & Negative Spike Forecaster
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -141,3 +138,49 @@ pip install -r requirements.txt
 
 ```bash
 python -c "import energy_forecast; print('Module successfully imported:', energy_forecast)"
+```
+
+---
+
+## Data Ingestion & Bronze Lakehouse Layer
+
+The automated data ingestion component (`src/energy_forecast/components/data_ingestion.py`) extracts authoritative grid and market time series directly from the **Bundesnetzagentur SMARD API** using typed asynchronous streaming pipelines.
+
+### Bundesnetzagentur (SMARD) Endpoints & Telemetry Registry
+
+The ingestion pipeline queries the SMARD REST endpoints using the following target `filter_id` identifiers:
+
+* **Filter `4169` — Wholesale Day-Ahead Spot Market Price (Marktpreis DE/LU):**
+  * **Unit:** €/MWh
+  * **Description:** Hourly wholesale clearing price on the EPEX SPOT day-ahead auction for the German/Luxembourg bidding zone. Serves as the primary target variable for price forecasting and negative spike risk labeling.
+
+* **Filter `410` — Total Grid Load / Electricity Demand (Netzlast Gesamt):**
+  * **Unit:** MWh
+  * **Description:** Total actual power drawn across all four German transmission control zones (50Hertz, Amprion, TenneT, TransnetBW).
+
+* **Filter `4068` — Actual Generation: Photovoltaics (Photovoltaik):**
+  * **Unit:** MWh
+  * **Description:** Nationwide hourly solar feed-in, representing daytime intermittent generation peaks that drive midday price drops.
+
+* **Filter `4067` — Actual Generation: Wind Onshore (Wind Onshore):**
+  * **Unit:** MWh
+  * **Description:** Nationwide onshore wind turbine generation. High onshore feed-in during low-demand periods is a primary driver of sub-zero price collapses.
+
+* **Filter `1225` — Actual Generation: Wind Offshore (Wind Offshore):**
+  * **Unit:** MWh
+  * **Description:** Generation from high-capacity Baltic and North Sea offshore wind farms characterized by persistent baseline feed-in.
+
+* **Filter `4359` — Calculated Residual Load (Residuallast):**
+  * **Unit:** MWh
+  * **Description:** Official Bundesnetzagentur calculation of total grid load minus non-dispatchable renewable energy feed-in (`Total Load - (Solar + Wind)`).
+
+---
+
+### Ingestion Pipeline Architecture & Engineering Standards
+
+* **Base URL:** `https://www.smard.de/app/chart_data`
+* **Partitioned Ingestion Pattern:**
+  1. **Index Resolution:** Queries `GET /{filter_id}/{region}/index_{resolution}.json` to retrieve epoch millisecond chunk keys for the last 52 weekly intervals.
+  2. **Asynchronous Chunk Extraction:** Streams payload chunks concurrently via `httpx.AsyncClient` bounded by an `asyncio.Semaphore` to maximize network throughput while honoring rate limits.
+  3. **UTC Alignment & Standardization:** Converts raw millisecond epoch integers into timezone-aware `UTC` timestamps, drops duplicate timestamps, and casts numeric series to `Float64`.
+  4. **Bronze Layer Sink:** Merges all aligned telemetry streams along `timestamp_utc` and persists the combined dataset to `data/raw/smard_market_features.parquet` with Zstandard (`zstd`) compression.
